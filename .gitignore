@@ -1,0 +1,17 @@
+# Secretos y configuración
+.env
+
+# Temporales de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Archivos de sistema/IDE
+.vscode/
+run.bat
+.DS_Store
