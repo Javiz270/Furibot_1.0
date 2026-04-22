@@ -1,10 +1,25 @@
+# ============================================================
+# Furibot - Módulo: Celebrations
+# Descripción: Maneja los mensajes de despedida cuando un miembro
+#              abandona el servidor. Procesa payloads JSON de Discohook
+#              y aplica placeholders dinámicos con datos del usuario.
+# Autor: Javier Santos
+# ============================================================
+
 import json
 import discord
 from discord.ext import commands
 
 
+# -------------------------------------------------------
+# Funciones auxiliares de procesamiento de JSON
+# -------------------------------------------------------
+
 def _normalize_discohook_payload(payload):
-    """Discohook exporta a veces { "messages": [ { "data": { ... } } ] }."""
+    """
+    Normaliza el payload de Discohook a su formato base (dict de contenido).
+    Soporta el formato con wrapper 'messages[0].data' y el formato directo con 'data'.
+    """
     if not isinstance(payload, dict):
         return payload
     if "messages" in payload and isinstance(payload["messages"], list) and payload["messages"]:
@@ -17,6 +32,10 @@ def _normalize_discohook_payload(payload):
 
 
 def _build_placeholders(guild: discord.Guild, member: discord.Member):
+    """
+    Construye el diccionario de placeholders disponibles para los mensajes de despedida.
+    Tokens soportados: {user}, {mention}, {username}, {server}, {member_count}, entre otros.
+    """
     member_count = guild.member_count or 0
 
     avatar = (
@@ -25,7 +44,6 @@ def _build_placeholders(guild: discord.Guild, member: discord.Member):
         or getattr(member, "default_avatar", None)
     )
     avatar_url = str(getattr(avatar, "url", ""))
-
     mention = getattr(member, "mention", str(member))
     display_name = getattr(member, "display_name", str(member))
 
@@ -47,6 +65,10 @@ def _build_placeholders(guild: discord.Guild, member: discord.Member):
 
 
 def _apply_placeholders(obj, placeholders):
+    """
+    Reemplaza recursivamente los placeholders en strings, listas y dicts.
+    Permite aplicar los tokens de usuario/servidor a todo el payload JSON.
+    """
     if isinstance(obj, str):
         for token, value in placeholders.items():
             obj = obj.replace(token, value)
@@ -58,42 +80,49 @@ def _apply_placeholders(obj, placeholders):
     return obj
 
 
+# -------------------------------------------------------
+# Cog principal
+# -------------------------------------------------------
+
 class Celebrations(commands.Cog):
+    """Cog de despedidas. Envía mensajes personalizados cuando un miembro abandona el servidor."""
+
     def __init__(self, bot):
         self.bot = bot
 
     async def _send_from_config(self, guild: discord.Guild, member: discord.Member, config_data):
+        """
+        Parsea el JSON de configuración de salida, aplica placeholders
+        y envía el mensaje al canal configurado.
+        Soporta formato legacy con wrapper 'discohook_json' y el formato actual de Discohook.
+        """
         if not config_data:
-            print(
-                f"ℹ️ Despedida omitida en {guild.name}: sin leave_json en server_configs "
-                f"(o fila inexistente para este guild_id)."
-            )
+            print(f"[INFO] Despedida omitida en {guild.name}: sin leave_json en server_configs.")
             return
 
+        # --- Parseo y normalización del payload JSON ---
         try:
             channel_id = int(config_data.get("channel_id") or 0)
             raw_json = config_data.get("json")
+
             if raw_json is None:
-                print(
-                    f"ℹ️ Despedida omitida en {guild.name}: leave_json es NULL en server_configs."
-                )
+                print(f"[INFO] Despedida omitida en {guild.name}: leave_json es NULL.")
                 return
+
             if isinstance(raw_json, dict):
                 payload = _normalize_discohook_payload(raw_json)
             elif isinstance(raw_json, str):
                 if not raw_json.strip():
-                    print(
-                        f"ℹ️ Despedida omitida en {guild.name}: leave_json vacío en server_configs."
-                    )
+                    print(f"[INFO] Despedida omitida en {guild.name}: leave_json vacío.")
                     return
                 payload = json.loads(raw_json.strip())
                 payload = _normalize_discohook_payload(payload)
             else:
-                # jsonb u otro tipo desde PostgreSQL
+                # Tipo jsonb u otro tipo retornado directamente desde PostgreSQL
                 payload = json.loads(json.dumps(raw_json))
                 payload = _normalize_discohook_payload(payload)
 
-            # Compatibilidad con formato antiguo donde el JSON incluía channel_id/discohook_json.
+            # Compatibilidad con formato legacy que incluía channel_id/discohook_json
             if isinstance(payload, dict) and "discohook_json" in payload:
                 if not channel_id:
                     channel_id = int(payload.get("channel_id", 0))
@@ -103,28 +132,30 @@ class Celebrations(commands.Cog):
                 else:
                     payload = json.loads(inner or "{}")
                     payload = _normalize_discohook_payload(payload)
+
         except Exception as e:
-            print(f"Error parseando leave_json en {guild.name}: {e}")
+            print(f"[ERROR] Parseando leave_json en {guild.name}: {e}")
             return
 
         if not isinstance(payload, dict):
-            print(f"⚠️ Despedida en {guild.name}: leave_json no es un objeto JSON válido (dict).")
+            print(f"[WARN] Despedida en {guild.name}: leave_json no es un objeto JSON válido.")
             return
 
         if not channel_id:
             print(
-                f"ℹ️ Despedida omitida en {guild.name}: falta leave_channel_id y welcome_channel_id "
-                "en server_configs. Usa `/set_leave canal:#canal ...` o rellena al menos el canal de bienvenida."
+                f"[INFO] Despedida omitida en {guild.name}: falta leave_channel_id y welcome_channel_id. "
+                "Usa /set_leave o configura al menos el canal de bienvenida."
             )
             return
 
+        # --- Resolución del canal de destino ---
         channel = guild.get_channel(channel_id) or self.bot.get_channel(channel_id)
         if channel is None:
-            print(f"Canal de salida no encontrado ({channel_id}) en {guild.name}")
+            print(f"[WARN] Canal de salida no encontrado ({channel_id}) en {guild.name}.")
             return
 
+        # --- Aplicación de placeholders y construcción del mensaje ---
         payload = _apply_placeholders(payload, _build_placeholders(guild, member))
-
         content = payload.get("content")
 
         embeds = []
@@ -138,21 +169,27 @@ class Celebrations(commands.Cog):
 
         if not content and not embeds:
             print(
-                f"⚠️ Despedida en {guild.name}: el JSON no tiene content ni embeds "
-                "(Discord no permite mensajes vacíos). Revisa el export de Discohook."
+                f"[WARN] Despedida en {guild.name}: JSON sin content ni embeds. "
+                "Discord no permite mensajes vacíos — revisa el export de Discohook."
             )
             return
 
+        # --- Envío del mensaje ---
         try:
             await channel.send(content=content, embeds=embeds if embeds else None)
         except Exception as e:
-            print(f"Error enviando despedida en {guild.name}: {e}")
+            print(f"[ERROR] Enviando despedida en {guild.name}: {e}")
+
+    # -------------------------------------------------------
+    # Eventos
+    # -------------------------------------------------------
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
+        """Dispara el mensaje de despedida cuando un miembro abandona el servidor."""
         stats_cog = self.bot.get_cog("Stats")
         if not stats_cog:
-            print(f"⚠️ Despedida omitida en {member.guild.name}: no está cargado el cog Stats")
+            print(f"[WARN] Despedida omitida en {member.guild.name}: cog Stats no cargado.")
             return
 
         config_data = await stats_cog.get_leave_config(member.guild.id)
