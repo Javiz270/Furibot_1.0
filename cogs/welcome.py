@@ -1,9 +1,25 @@
+# ============================================================
+# Furibot - Módulo: Welcome
+# Descripción: Maneja los mensajes de bienvenida y salida de miembros.
+#              Procesa payloads JSON de Discohook y aplica placeholders
+#              dinámicos con datos del usuario y servidor.
+# Autor: Javier Santos
+# ============================================================
+
 import json
 import discord
 from discord.ext import commands
 
 
+# -------------------------------------------------------
+# Funciones auxiliares de procesamiento de JSON
+# -------------------------------------------------------
+
 def _normalize_discohook_payload(payload):
+    """
+    Normaliza el payload de Discohook a su formato base (dict de contenido).
+    Soporta el formato con wrapper 'messages[0].data' y el formato directo con 'data'.
+    """
     if not isinstance(payload, dict):
         return payload
     if "messages" in payload and isinstance(payload["messages"], list) and payload["messages"]:
@@ -16,6 +32,10 @@ def _normalize_discohook_payload(payload):
 
 
 def _build_placeholders(guild: discord.Guild, member: discord.Member):
+    """
+    Construye el diccionario de placeholders disponibles para los mensajes de bienvenida/salida.
+    Tokens soportados: {user}, {mention}, {username}, {server}, {member_count}, entre otros.
+    """
     member_count = guild.member_count or 0
 
     avatar = (
@@ -24,7 +44,6 @@ def _build_placeholders(guild: discord.Guild, member: discord.Member):
         or getattr(member, "default_avatar", None)
     )
     avatar_url = str(getattr(avatar, "url", ""))
-
     mention = getattr(member, "mention", str(member))
     display_name = getattr(member, "display_name", str(member))
 
@@ -46,6 +65,10 @@ def _build_placeholders(guild: discord.Guild, member: discord.Member):
 
 
 def _apply_placeholders(obj, placeholders):
+    """
+    Reemplaza recursivamente los placeholders en strings, listas y dicts.
+    Permite aplicar los tokens de usuario/servidor a todo el payload JSON.
+    """
     if isinstance(obj, str):
         for token, value in placeholders.items():
             obj = obj.replace(token, value)
@@ -57,25 +80,38 @@ def _apply_placeholders(obj, placeholders):
     return obj
 
 
+# -------------------------------------------------------
+# Cog principal
+# -------------------------------------------------------
+
 class Welcome(commands.Cog):
+    """Cog de bienvenida. Envía mensajes personalizados cuando un miembro entra o sale del servidor."""
+
     def __init__(self, bot):
         self.bot = bot
 
     async def _send_from_config(self, guild: discord.Guild, member: discord.Member, config_data):
+        """
+        Parsea el JSON de configuración, aplica placeholders y envía el mensaje al canal configurado.
+        Soporta formato legacy con wrapper 'discohook_json' y el formato actual de Discohook.
+        """
         if not config_data:
             return
 
+        # --- Parseo y normalización del payload JSON ---
         try:
             channel_id = int(config_data.get("channel_id") or 0)
             raw_json = config_data.get("json")
+
             if raw_json is None:
-                print(f"ℹ️ Bienvenida omitida en {guild.name}: welcome_json es NULL.")
+                print(f"[INFO] Bienvenida omitida en {guild.name}: welcome_json es NULL.")
                 return
+
             if isinstance(raw_json, dict):
                 payload = _normalize_discohook_payload(raw_json)
             elif isinstance(raw_json, str):
                 if not raw_json.strip():
-                    print(f"ℹ️ Bienvenida omitida en {guild.name}: welcome_json vacío.")
+                    print(f"[INFO] Bienvenida omitida en {guild.name}: welcome_json vacío.")
                     return
                 payload = json.loads(raw_json.strip())
                 payload = _normalize_discohook_payload(payload)
@@ -83,7 +119,7 @@ class Welcome(commands.Cog):
                 payload = json.loads(json.dumps(raw_json))
                 payload = _normalize_discohook_payload(payload)
 
-            # Compatibilidad con formato antiguo donde el JSON incluía channel_id/discohook_json.
+            # Compatibilidad con formato legacy que incluía channel_id/discohook_json
             if isinstance(payload, dict) and "discohook_json" in payload:
                 if not channel_id:
                     channel_id = int(payload.get("channel_id", 0))
@@ -93,28 +129,30 @@ class Welcome(commands.Cog):
                 else:
                     payload = json.loads(inner or "{}")
                     payload = _normalize_discohook_payload(payload)
+
         except Exception as e:
-            print(f"Error parseando welcome_json en {guild.name}: {e}")
+            print(f"[ERROR] Parseando welcome_json en {guild.name}: {e}")
             return
 
         if not isinstance(payload, dict):
-            print(f"⚠️ Bienvenida en {guild.name}: welcome_json no es un objeto JSON válido (dict).")
+            print(f"[WARN] Bienvenida en {guild.name}: welcome_json no es un objeto JSON válido.")
             return
 
         if not channel_id:
             print(
-                f"ℹ️ Bienvenida omitida en {guild.name}: falta canal "
-                "(welcome_channel_id, leave_channel_id y log_channel_id son NULL). Usa `/set_welcome`."
+                f"[INFO] Bienvenida omitida en {guild.name}: falta canal "
+                "(welcome_channel_id, leave_channel_id y log_channel_id son NULL). Usa /set_welcome."
             )
             return
 
+        # --- Resolución del canal de destino ---
         channel = guild.get_channel(channel_id) or self.bot.get_channel(channel_id)
         if channel is None:
-            print(f"Canal de bienvenida no encontrado ({channel_id}) en {guild.name}")
+            print(f"[WARN] Canal de bienvenida no encontrado ({channel_id}) en {guild.name}.")
             return
 
+        # --- Aplicación de placeholders y construcción del mensaje ---
         payload = _apply_placeholders(payload, _build_placeholders(guild, member))
-
         content = payload.get("content")
 
         embeds = []
@@ -127,28 +165,31 @@ class Welcome(commands.Cog):
                 embeds.append(discord.Embed.from_dict(embed_dict))
 
         if not content and not embeds:
-            print(
-                f"⚠️ Bienvenida en {guild.name}: JSON sin content ni embeds; no se envía nada."
-            )
+            print(f"[WARN] Bienvenida en {guild.name}: JSON sin content ni embeds; no se envía nada.")
             return
 
+        # --- Envío del mensaje ---
         try:
             await channel.send(content=content, embeds=embeds if embeds else None)
         except Exception as e:
-            print(f"Error enviando bienvenida en {guild.name}: {e}")
+            print(f"[ERROR] Enviando bienvenida en {guild.name}: {e}")
+
+    # -------------------------------------------------------
+    # Eventos
+    # -------------------------------------------------------
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
+        """Dispara el mensaje de bienvenida cuando un miembro se une al servidor."""
         stats_cog = self.bot.get_cog("Stats")
         if not stats_cog:
-            print(f"⚠️ Bienvenida omitida en {member.guild.name}: no está cargado el cog Stats")
+            print(f"[WARN] Bienvenida omitida en {member.guild.name}: cog Stats no cargado.")
             return
 
         config_data = await stats_cog.get_welcome_config(member.guild.id)
         if not config_data:
             print(
-                f"ℹ️ Bienvenida omitida en {member.guild.name}: sin welcome_json en server_configs "
-                f"(o fila inexistente para este guild_id)."
+                f"[INFO] Bienvenida omitida en {member.guild.name}: sin welcome_json en server_configs."
             )
             return
 
