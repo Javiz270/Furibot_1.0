@@ -10,7 +10,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = os.getenv("GUILD_ID")
 
-class AegisBot(commands.Bot):
+class FuriBot(commands.Bot):
     def __init__(self):
         # Definimos los permisos necesarios
         intents = discord.Intents.default()
@@ -56,5 +56,5 @@ class AegisBot(commands.Bot):
 
 # Ejecución del bot
 if __name__ == "__main__":
-    bot = AegisBot()
+    bot = FuriBot()
     bot.run(TOKEN)
