@@ -125,4 +125,4 @@ El bot utiliza las siguientes tablas en Supabase:
 
 **Javier Santos** — [@Javiz270](https://github.com/Javiz270)
 
-Desarrollado como proyecto personal para aprender desarrollo de bots, arquitecturas modulares e integración con bases de datos en la nube.
+Proyecto personal en producción — arquitectura modular orientada a multi-servidor con persistencia en base de datos cloud
