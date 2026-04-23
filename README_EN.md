@@ -124,5 +124,4 @@ The bot uses the following tables in Supabase:
 ## Author
 
 **Javier Santos** — [@Javiz270](https://github.com/Javiz270)
-
-Built as a personal project to learn bot development, modular architecture, and cloud database integration.
+Personal project in production — modular architecture designed for multi-server scalability with cloud database persistence.
